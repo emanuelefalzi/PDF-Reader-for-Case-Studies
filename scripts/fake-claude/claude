@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+"""Fake CLI that imitates `claude` (SPEC §4, §7.5, §7.8).
+
+Used by the whole test suite (SPEC §10.2): no real calls unless
+LELEPDF_REAL_CLAUDE=1. See README.md in this folder for the details of each
+mode.
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+
+VERSION_STRING = "2.1.268 (Claude Code)"
+
+VALUE_FLAGS = {
+    "--model", "--effort", "--system-prompt", "--json-schema",
+    "--input-format", "--output-format", "--tools", "--permission-mode",
+}
+
+# Flags verified on 2026-09-14 (SPEC §4) and checked by ClaudeCLILocator
+# (SPEC §13): --help must list all of them, otherwise the app reports the CLI
+# as unusable.
+HELP_TEXT = """Usage: claude [options]
+
+  -p, --print                     non-interactive mode
+  --model <sonnet|opus>
+  --effort <low|default>
+  --system-prompt <text>
+  --json-schema <text>
+  --input-format <text|stream-json>
+  --output-format <text|json|stream-json>
+  --tools <list>
+  --allowedTools <pattern>
+  --permission-mode <mode>
+  --safe-mode
+  --strict-mcp-config
+  --no-session-persistence
+  --include-partial-messages
+  --verbose
+"""
+
+
+def mode():
+    """FAKE_CLAUDE_MODE_FILE takes precedence if present: it consumes the first
+    line on every invocation (SPEC §10.2: "invalid_json then success")."""
+    mode_file = os.environ.get("FAKE_CLAUDE_MODE_FILE")
+    if mode_file and os.path.isfile(mode_file):
+        try:
+            with open(mode_file) as f:
+                lines = f.read().splitlines()
+            if lines:
+                first, rest = lines[0].strip(), lines[1:]
+                with open(mode_file, "w") as f:
+                    if rest:
+                        f.write("\n".join(rest) + "\n")
+                if first:
+                    return first
+        except OSError:
+            pass
+    return os.environ.get("FAKE_CLAUDE_MODE", "success")
+
+
+def peek_mode():
+    """Like mode(), but without consuming a line of FAKE_CLAUDE_MODE_FILE:
+    used only to annotate the log (log_invocation is called on every
+    invocation, including the --version/--help of ClaudeCLILocator's capability
+    check, and must not consume the queue meant for the real -p calls)."""
+    mode_file = os.environ.get("FAKE_CLAUDE_MODE_FILE")
+    if mode_file and os.path.isfile(mode_file):
+        try:
+            with open(mode_file) as f:
+                for line in f.read().splitlines():
+                    if line.strip():
+                        return line.strip()
+        except OSError:
+            pass
+    return os.environ.get("FAKE_CLAUDE_MODE", "success")
+
+
+def log_invocation(argv):
+    path = os.environ.get("FAKE_CLAUDE_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps({"argv": argv, "mode": peek_mode(), "cwd": os.getcwd(), "ts": time.time()}) + "\n")
+    except OSError:
+        pass
+
+
+def log_chat_input(text):
+    path = os.environ.get("FAKE_CLAUDE_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps({"event": "chat_input", "text": text, "ts": time.time()}) + "\n")
+    except OSError:
+        pass
+
+
+def parse_flags(args):
+    """Simple extraction: known flags that take a value -> dict;
+    everything else is ignored (booleans such as --safe-mode, --verbose, ...)."""
+    flags = {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in VALUE_FLAGS and i + 1 < len(args):
+            flags[a] = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    return flags
+
+
+def sha256_of(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_fixture(prompt_text):
+    """FAKE_CLAUDE_FIXTURES_DIR: replay by sha256 of the prompt, if it exists."""
+    d = os.environ.get("FAKE_CLAUDE_FIXTURES_DIR")
+    if not d:
+        return None
+    path = os.path.join(d, sha256_of(prompt_text) + ".json")
+    if os.path.isfile(path):
+        with open(path) as f:
+            return f.read()
+    return None
+
+
+def load_response_file():
+    path = os.environ.get("FAKE_CLAUDE_RESPONSE_FILE")
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return f.read()
+
+
+def default_marks_from_text(source_text):
+    words = [w.strip(".,;:()[]\"'") for w in source_text.split()]
+    candidates = [w for w in words if len(w) >= 4 and w.isalpha()]
+    seen = []
+    for w in candidates:
+        if w.lower() not in [s.lower() for s in seen]:
+            seen.append(w)
+        if len(seen) >= 8:
+            break
+    fallback = ["Concetto", "Elemento", "Azienda", "Numero", "Decide", "Approva", "Aumenta", "Riduce"]
+    while len(seen) < 8:
+        seen.append(fallback[len(seen) % len(fallback)])
+    kinds = ["rectangle", "rectangle", "circle", "circle", "underline", "underline", "arrow", "arrow"]
+    marks = []
+    for idx, (kind, text) in enumerate(zip(kinds, seen), start=1):
+        marks.append({
+            "id": f"m{idx}",
+            "text": text,
+            "mark": kind,
+            "term": text.lower(),
+        })
+    return marks
+
+
+def default_analysis_output(prompt_text):
+    marks = default_marks_from_text(prompt_text)
+    rect = marks[0]["text"]
+    circ = marks[2]["text"]
+    und = marks[4]["text"]
+    arr = marks[6]["text"]
+    rewrite_text = f"{{{{m1|{rect}}}}} riguarda {{{{m3|{circ}}}}}: {{{{m5|{und}}}}} porta a {{{{m7|{arr}}}}}."
+    return {
+        "title": "Blocco di prova",
+        "rewrite": [
+            {"kind": "summary", "text": f"Riassunto sintetico del blocco su {rect}."},
+            {"kind": "paragraph", "text": rewrite_text},
+        ],
+        "marks": marks,
+        "links": [
+            {"from": "m5", "to": "m7", "label": "porta a", "kind": "effect"},
+        ],
+    }
+
+
+def default_toc_output():
+    return {
+        "entries": [
+            {"title": "Capitolo 1", "level": 1, "page": 1},
+            {"title": "Sezione 1.1", "level": 2, "page": 2},
+            {"title": "Capitolo 2", "level": 1, "page": 8},
+        ]
+    }
+
+
+# Reads the lines "- p.N [suggested level L, ...]: "Title" - followed by: ..."
+# written by TocGenerator.buildPrompt (LelePdf/Claude/TocGenerator.swift):
+# this way the fake response really reflects the candidates received instead
+# of always returning the same fixed contents list.
+CANDIDATE_RE = re.compile(r'-\s*p\.(\d+)\s*\[suggested level (\d+)[^\]]*\]:\s*"([^"]*)"')
+
+
+def toc_output_from_prompt(prompt_text):
+    matches = CANDIDATE_RE.findall(prompt_text)
+    if not matches:
+        return default_toc_output()
+    entries = [
+        {"title": title.strip(), "level": int(level), "page": int(page)}
+        for page, level, title in matches
+    ]
+    return {"entries": entries}
+
+
+def is_toc_schema(schema_text):
+    return schema_text is not None and "entries" in schema_text
+
+
+NETWORK_MESSAGE = "network error: getaddrinfo ENOTFOUND api.anthropic.com"
+
+
+def result_envelope(structured_output, duration_ms=1200, is_error=False, result_text="", stop_reason="tool_use"):
+    return {
+        "type": "result",
+        "subtype": "error" if is_error else "success",
+        "is_error": is_error,
+        "duration_ms": duration_ms,
+        "result": result_text,
+        "structured_output": structured_output,
+        "usage": {
+            "input_tokens": 120,
+            "cache_creation_input_tokens": 3400,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 640,
+        },
+        "stop_reason": stop_reason,
+    }
+
+
+def rate_limit_epoch():
+    """Always one hour in the future relative to "now": a fixed epoch
+    hand-written in the source inevitably ends up in the past (it happened
+    during development: a fixed value written earlier fell before the time
+    the tests ran, which still triggered a new real call instead of
+    BatchRunner's fast-fail, SPEC §5.12). Used both in the text of `result`
+    (one-shot) and in the `resetsAt` field of `rate_limit_event` (chat): the
+    two error paths stay paired only if they share the same epoch.
+    """
+    return int(time.time()) + 3600
+
+
+def rate_limit_message():
+    return f"Claude AI usage limit reached|{rate_limit_epoch()}"
+
+
+def rate_limit_event(status, five_hour_util, seven_day_util, legacy=False):
+    """The chat's `rate_limit_event` (SPEC §7.8): the real CLI (v2.1.26x,
+    captured on 2026-09-16) nests status/resetsAt/windows inside
+    `rate_limit_info` and sends them on EVERY turn, not only when the limit is
+    hit. `legacy=True` instead reproduces the old format with the keys at the
+    root (never observed live, kept only to verify that the app still
+    interprets it)."""
+    five_hour_reset = rate_limit_epoch()
+    seven_day_reset = five_hour_reset + 4 * 24 * 3600
+    if legacy:
+        return {"type": "rate_limit_event", "status": status, "resetsAt": five_hour_reset}
+    return {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": status,
+            "resetsAt": five_hour_reset,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": False,
+            "unifiedWindows": {
+                "five_hour": {"utilization": five_hour_util, "resetsAt": five_hour_reset},
+                "seven_day": {"utilization": seven_day_util, "resetsAt": seven_day_reset},
+            },
+        },
+        "uuid": "fake-rate-limit-uuid",
+        "session_id": "fake-session",
+    }
+
+
+def sleep_forever():
+    while True:
+        time.sleep(3600)
+
+
+def cmd_version():
+    print(VERSION_STRING)
+    return 0
+
+
+def cmd_auth_status():
+    if mode() == "not_logged_in":
+        sys.stderr.write("Not logged in. Run `claude auth login`.\n")
+        print(json.dumps({"loggedIn": False}))
+        return 1
+    print(json.dumps({
+        "loggedIn": True,
+        "authMethod": "claude.ai",
+        "email": "test@example.com",
+        "subscriptionType": "pro",
+    }))
+    return 0
+
+
+def cmd_one_shot(prompt_text, flags):
+    m = mode()
+    if m == "not_logged_in":
+        sys.stderr.write("Not logged in. Run `claude auth login`.\n")
+        return 1
+    if m == "network":
+        sys.stderr.write(NETWORK_MESSAGE + "\n")
+        return 1
+    if m == "timeout":
+        sleep_forever()
+        return 0  # never reached
+
+    fixture = load_fixture(prompt_text) or load_response_file()
+    if fixture is not None:
+        try:
+            parsed = json.loads(fixture)
+        except ValueError:
+            # the fixture is not valid JSON: print it back as it is
+            # (useful to simulate recorded corrupted responses).
+            sys.stdout.write(fixture)
+            return 0
+        if isinstance(parsed, dict) and "type" in parsed and "structured_output" in parsed:
+            print(json.dumps(parsed))
+        else:
+            print(json.dumps(result_envelope(parsed)))
+        return 0
+
+    if m == "invalid_json":
+        # structured_output missing and invalid body: the app must detect
+        # the parsing error and retry/fail (SPEC §7.5).
+        sys.stdout.write("{this is not valid json...\n")
+        return 0
+
+    if m == "rate_limit":
+        print(json.dumps(result_envelope(
+            structured_output=None,
+            is_error=True,
+            result_text=rate_limit_message(),
+            stop_reason="stop",
+        )))
+        return 0
+
+    # success (default)
+    schema_text = flags.get("--json-schema")
+    if is_toc_schema(schema_text):
+        output = toc_output_from_prompt(prompt_text)
+    elif schema_text is None:
+        print(json.dumps(result_envelope(
+            structured_output=None,
+            result_text="Riassunto compatto della conversazione con le pagine citate [p. 3].",
+            stop_reason="end_turn",
+        )))
+        return 0
+    else:
+        output = default_analysis_output(prompt_text)
+    print(json.dumps(result_envelope(output)))
+    return 0
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def chunk_text(text, size=6):
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+
+def cmd_help():
+    print(HELP_TEXT)
+    return 0
+
+
+def cmd_chat(flags):
+    m = mode()
+    if m == "not_logged_in":
+        sys.stderr.write("Not logged in. Run `claude auth login`.\n")
+        return 1
+    if m == "network":
+        sys.stderr.write(NETWORK_MESSAGE + "\n")
+        return 1
+    if m == "timeout":
+        sleep_forever()
+        return 0
+
+    emit({
+        "type": "system",
+        "subtype": "init",
+        "session_id": "fake-session",
+        "model": flags.get("--model", "sonnet"),
+        "tools": [],
+        "cwd": os.getcwd(),
+    })
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+            content = payload.get("message", {}).get("content", [])
+            user_text = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+        except ValueError:
+            user_text = line
+        log_chat_input(user_text)
+
+        fixture = load_fixture(user_text) or load_response_file()
+        if fixture is not None:
+            try:
+                parsed = json.loads(fixture)
+                reply_text = parsed.get("result") or json.dumps(parsed.get("structured_output", parsed))
+            except ValueError:
+                reply_text = fixture
+        else:
+            # Sample text that deliberately includes "[p. N]" and
+            # "<fuori>...</fuori>" markers cut in half by a chunk boundary, to
+            # exercise the app's streaming parser (SPEC §7.8).
+            reply_text = (
+                f"Risposta alla domanda: \"{user_text[:40]}\". "
+                "Il documento lo spiega [p. 3] con chiarezza. "
+                "<fuori>Questa parte viene da conoscenza esterna, non dal PDF.</fuori> "
+                "Vedi anche [p. 12] per un approfondimento."
+            )
+
+        if m != "result_only":
+            for piece in chunk_text(reply_text):
+                emit({
+                    "type": "stream_event",
+                    "event": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": piece},
+                    },
+                })
+
+            emit({
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": reply_text}]},
+            })
+
+        if m == "rate_limit":
+            emit(rate_limit_event("rejected", 1.0, 0.9))
+            emit(result_envelope(
+                structured_output=None,
+                is_error=True,
+                result_text=rate_limit_message(),
+                stop_reason="stop",
+            ))
+            continue
+
+        if m == "rate_limit_legacy":
+            # Verifies that the "old" format (keys at the root, without
+            # `rate_limit_info`) is still interpretable.
+            emit(rate_limit_event("rejected", 1.0, 0.9, legacy=True))
+            emit(result_envelope(
+                structured_output=None,
+                is_error=True,
+                result_text=rate_limit_message(),
+                stop_reason="stop",
+            ))
+            continue
+
+        if m == "rate_limit_warning":
+            # "allowed" but above the warning threshold (>= 80%).
+            emit(rate_limit_event("allowed", 0.85, 0.5))
+            emit(result_envelope(
+                structured_output=None,
+                is_error=False,
+                result_text=reply_text,
+                stop_reason="end_turn",
+            ))
+            continue
+
+        # Normal turn: the real CLI still sends its rate_limit_event (usually
+        # "allowed" with low usage, here 27%/37% as in the 2026-09-16 capture)
+        # before the result, not only when the limit is hit (that was a bug:
+        # the app always showed the banner).
+        emit(rate_limit_event("allowed", 0.27, 0.37))
+        emit(result_envelope(
+            structured_output=None,
+            is_error=False,
+            result_text=reply_text,
+            stop_reason="end_turn",
+        ))
+
+    return 0
+
+
+def main():
+    argv = sys.argv[1:]
+    log_invocation(argv)
+
+    if argv[:1] == ["--version"]:
+        return cmd_version()
+    if argv[:1] == ["--help"]:
+        return cmd_help()
+    if argv[:2] == ["auth", "status"]:
+        return cmd_auth_status()
+
+    if argv[:1] == ["-p"]:
+        rest = argv[1:]
+        flags = parse_flags(rest)
+        if flags.get("--input-format") == "stream-json":
+            return cmd_chat(flags)
+        prompt_text = rest[0] if rest and not rest[0].startswith("--") else ""
+        return cmd_one_shot(prompt_text, flags)
+
+    sys.stderr.write(f"claude (fake): unrecognized command: {argv}\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

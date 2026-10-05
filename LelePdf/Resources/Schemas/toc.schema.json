@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "level": { "type": "integer", "minimum": 1, "maximum": 3 },
+          "page": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["title", "level", "page"]
+      }
+    }
+  },
+  "required": ["entries"]
+}

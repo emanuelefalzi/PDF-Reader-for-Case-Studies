@@ -1,0 +1,90 @@
+name: LelePdf
+options:
+  bundleIdPrefix: com.emanuele
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  # English is the development language, so that Italian (or any other
+  # language) can be added later as a localization without touching the code
+  # (String Catalog, `LelePdf/Localizable.xcstrings`).
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: NO
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    # Extracts the strings used in Text(...)/String(localized:)/
+    # LocalizedStringKey during the build and merges them into the String
+    # Catalog (compiler behavior, not only the Xcode IDE).
+    SWIFT_EMIT_LOC_STRINGS: YES
+  # Signing: both configurations are ad-hoc signed ("-"), so the project builds
+  # without any certificate or Apple Developer account, and unattended test
+  # runs do not depend on access to a private key in the keychain
+  # (errSecInternalComponent). For a stable signature (macOS then recognizes
+  # the installed app as the same one across rebuilds, so privacy permissions
+  # such as Desktop access are granted only once), set your own team id in
+  # Release: CODE_SIGN_IDENTITY: "Apple Development" and
+  # DEVELOPMENT_TEAM: "<your team id>".
+  configs:
+    Debug:
+      CODE_SIGN_IDENTITY: "-"
+      DEVELOPMENT_TEAM: ""
+    Release:
+      CODE_SIGN_IDENTITY: "-"
+      DEVELOPMENT_TEAM: ""
+targets:
+  LelePdf:
+    type: application
+    platform: macOS
+    sources:
+      - path: LelePdf
+        excludes:
+          - "App/Info.plist"
+          - "Resources/**"
+      - path: LelePdf/Resources/Prompts
+        type: folder
+        buildPhase: resources
+      - path: LelePdf/Resources/Schemas
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.emanuele.LelePdf
+        PRODUCT_NAME: LelePdf
+        INFOPLIST_FILE: LelePdf/App/Info.plist
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Emanuele Falzi"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The app does not use AppIntents: avoids the Xcode 26 extractor warning
+        # "Metadata extraction skipped. No AppIntents.framework dependency".
+        LM_FORCE_LINK_GENERATION: YES
+        LM_FILTER_WARNINGS: YES
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_USER_SELECTED_FILES: NO
+  LelePdfTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: LelePdfTests
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/LelePdf.app/Contents/MacOS/LelePdf"
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: LelePdf
+schemes:
+  LelePdf:
+    build:
+      targets:
+        LelePdf: all
+        LelePdfTests: [test]
+    test:
+      targets:
+        - LelePdfTests
+      gatherCoverageData: false

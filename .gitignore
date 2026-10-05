@@ -1,0 +1,56 @@
+# ── Generated Xcode project ─────────────────────────────────
+# LelePdf.xcodeproj is regenerated from project.yml with `xcodegen`.
+*.xcodeproj/
+*.xcworkspace/
+!*.xcodeproj/project.xcworkspace/
+
+# ── Build output ────────────────────────────────────────────
+build/
+DerivedData/
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+*.ipa
+*.app
+
+# ── Xcode user data ─────────────────────────────────────────
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+
+# ── Swift Package Manager (unused, just in case) ────────────
+.build/
+.swiftpm/
+Package.resolved
+
+# ── Tests ───────────────────────────────────────────────────
+# Real Claude responses recorded as fixtures: they contain text of the test
+# PDFs (under a personal-use license), so they must never be published.
+LelePdfTests/Fixtures/real/
+*.xcresult
+
+# ── PDF ─────────────────────────────────────────────────────
+# The test PDFs are never copied into the repository (SPEC §4).
+*.pdf
+
+# ── Claude Code (local session settings) ────────────────────
+.claude/
+
+# ── macOS ───────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Misc ────────────────────────────────────────────────────
+*.log
+*.swp
+*~
+__pycache__/
+*.pyc

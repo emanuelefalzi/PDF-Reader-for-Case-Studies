@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "rewrite": {
+      "type": "array",
+      "description": "Exactly one item, kind=outline, holding the ordered `lines` -- Claude never produces any other kind for a new analysis. Older kinds (summary/definition/bullets/steps/table/callout/paragraph) stay valid to DECODE an analysis saved by an earlier version, but are never requested from Claude again.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "enum": ["outline"] },
+          "lines": {
+            "type": "array",
+            "description": "The whole rewrite, paragraph by paragraph, as a single ordered sequence of typed lines.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["point", "subpoint", "explanation", "note", "formula", "consequence", "subheading", "definition", "example"],
+                  "description": "point: one main bullet per source paragraph. subpoint: a supporting detail nested under the last point/consequence. explanation: one short line of plain-prose explanation nested under the last point/consequence (Word style 'Spiegazione bullet'), not a sub-bullet -- at most one per point. note: a standalone aside worth setting apart (Word style 'Nota'). formula: a short formula, equation or fixed expression worth setting apart in its own line (Word style 'Formula'). consequence: a point that states a cause's effect/result (replaces the old '-> ' prefix convention; same level as point). subheading: a rare divider title INSIDE a section that has real unmarked sub-parts (Word style 'Grasso Titoli') -- it is never a title of the document's own index/table of contents (T1-T4), just a quiet divider line. definition: a standalone line (same level as point) used ONLY when the block's own text explicitly defines a term or concept; it states the term and its meaning as the text gives them (Word style 'Definizione'). example: a standalone line (same level as point) used ONLY for a concrete example, case or illustration that the block's own text actually presents as one (Word style 'Example')."
+                },
+                "text": { "type": "string" }
+              },
+              "required": ["type", "text"]
+            }
+          }
+        },
+        "required": ["kind", "lines"]
+      }
+    },
+    "marks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "mark": { "type": "string", "enum": ["rectangle", "circle", "underline", "arrow"] },
+          "term": { "type": "string" },
+          "termId": { "type": "string" }
+        },
+        "required": ["id", "text", "mark", "term"]
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "via": { "type": "string" },
+          "label": { "type": "string" },
+          "kind": { "type": "string", "enum": ["action", "effect"] }
+        },
+        "required": ["from", "to", "label", "kind"]
+      }
+    }
+  },
+  "required": ["title", "rewrite", "marks", "links"]
+}
